@@ -1,7 +1,6 @@
 # src/predictor.py
 
 import pandas as pd
-from .feature_engineering import create_features
 from catboost import CatBoostClassifier
 import joblib
 
@@ -11,7 +10,14 @@ class MarketingPredictor:
         self.feature_cols = None  # можно сохранить при обучении
 
     def predict_proba(self, purchases_df: pd.DataFrame, messages_df: pd.DataFrame):
-        X = create_features(purchases_df, messages_df)
-        # Убедитесь, что колонки совпадают с обучением
-        preds = self.model.predict_proba(X[self.model.feature_names_])[:, 1]
+        # Обработка признаков (можно вынести в отдельный класс)
+        X = self.create_features(purchases_df, messages_df)
+        
+        # Предсказание
+        preds = self.model.predict_proba(X)[:, 1]
         return pd.Series(preds, index=X['client_id'], name='target_proba')
+    
+    def create_features(self, purchases, messages):
+        # Копия логики из ноутбука — переносим сюда
+        from src.feature_engineering import create_features
+        return create_features(purchases, messages)
