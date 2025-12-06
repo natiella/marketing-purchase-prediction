@@ -1,53 +1,40 @@
+# src/feature_engineering.py
+
 import pandas as pd
+import ast
 
-class DataPreprocessor:
-    def __init__(self):
-        self.medians = {}
-        self.modes = {}
-        self.leaky_features = ['Unnamed: 0', 'id', 'Blood sugar', 'CK-MB', 'Troponin']
-        self.cols_with_nan = [
-            'Diabetes', 'Family History', 'Smoking', 'Obesity',
-            'Alcohol Consumption', 'Previous Heart Problems',
-            'Medication Use', 'Stress Level', 'Physical Activity Days Per Week'
-        ]
+def safe_eval(x):
+    try:
+        return ast.literal_eval(x)
+    except:
+        return []
 
-    def fit(self, df: pd.DataFrame):
-        for col in self.cols_with_nan:
-            if col in df.columns:
-                if df[col].dtype in ['float64', 'int64']:
-                    self.medians[col] = df[col].median()
-                else:
-                    mode_series = df[col].mode()
-                    self.modes[col] = mode_series[0] if not mode_series.empty else None
-        return self
-
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        cols_to_drop = [c for c in self.leaky_features if c in df.columns]
-        df = df.drop(columns=cols_to_drop, errors='ignore')
-        
-        for col in self.cols_with_nan:
-            if col in df.columns:
-                if col in self.medians:
-                    df[col] = df[col].fillna(self.medians[col])
-                elif col in self.modes and self.modes[col] is not None:
-                    df[col] = df[col].fillna(self.modes[col])
-        
-        binary_cols = [
-            'Diabetes', 'Family History', 'Smoking', 'Obesity',
-            'Alcohol Consumption', 'Previous Heart Problems',
-            'Medication Use', 'Stress Level'
-        ]
-        for col in binary_cols:
-            if col in df.columns:
-                df[col] = df[col].round().astype('int8')
-        
-        if 'Diet' in df.columns:
-            df['Diet'] = df['Diet'].round().astype('int8')
-        if 'Gender' in df.columns:
-            df['Gender'] = df['Gender'].astype('category')
-        
-        return df
-
-    def fit_transform(self, df):
-        return self.fit(df).transform(df)
+def create_features(purchases, messages):
+    # Обработка категорий
+    purchases['categories_list'] = purchases['category_ids'].apply(safe_eval)
+    
+    # Топ-50 категорий (можно сохранить как константу или обучать в fit)
+    all_cats = purchases.explode('categories_list')['categories_list'].value_counts().head(50).index.tolist()
+    top_cats = set(all_cats)
+    
+    for cat in top_cats:
+        col_name = f'cat_{cat}'
+        purchases[col_name] = purchases['categories_list'].apply(lambda x: 1 if cat in x else 0)
+    
+    # Агрегация
+    client_purch = purchases.groupby('client_id').agg(
+        total_quantity=('quantity', 'sum'),
+        avg_price=('price', 'mean'),
+        n_purchases=('client_id', 'count'),
+        n_unique_categories=('categories_list', lambda x: len(set('|'.join(map(str, x)).split('|'))))
+    ).reset_index()
+    
+    client_msgs = messages.groupby('client_id').agg(
+        total_messages=('message_id', 'count'),
+        opened_rate=('event', lambda x: (x == 'opened').mean()),
+        purchased_from_msg=('event', lambda x: (x == 'purchased').sum()),
+        n_unique_campaigns=('bulk_campaign_id', 'nunique')
+    ).reset_index()
+    
+    X = client_purch.merge(client_msgs, on='client_id', how='outer')
+    return X.fillna(0)
